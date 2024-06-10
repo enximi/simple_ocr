@@ -1,0 +1,12 @@
+[package]
+name = "simple_ocr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ort = { version = "2.0.0-rc.2", features = [] }
+image = "0.25.1"
+imageproc = "0.25.0"
+anyhow = "1.0.86"
+ndarray = "0.15.6"
+lazy_static = "1.4.0"
