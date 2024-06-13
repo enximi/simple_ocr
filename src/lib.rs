@@ -171,7 +171,10 @@ fn post_process(logits: ArrayBase<OwnedRepr<f32>, IxDyn>) -> (String, f32) {
     let text = best_path
         .iter()
         .filter(|&&x| x != TEXT_LABELS.len() as i64)
-        .map(|&x| TEXT_LABELS[x as usize])
+        .map(|&x| match TEXT_LABELS[x as usize] {
+            "<space>" => " ",
+            text => text,
+        })
         .collect::<String>();
     let prob = *probs
         .map_axis(Axis(0), |x| {
