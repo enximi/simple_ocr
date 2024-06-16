@@ -28,21 +28,20 @@ use ndarray::{array, Array, ArrayBase, Axis, Dim, Dimension, Ix1, Ix3, Ix4, IxDy
 use ort::{inputs, Session};
 
 lazy_static! {
-    static ref MODEL: Session = {
-        let model_bytes = include_bytes!(
+    static ref MODEL: Session = Session::builder()
+        .unwrap()
+        .commit_from_memory(include_bytes!(
             "../assets/models/cnocr-v2.3-doc-densenet_lite_136-gru-epoch=004-ft-model.onnx"
-        );
-        Session::builder()
-            .unwrap()
-            .commit_from_memory(model_bytes)
-            .unwrap()
-    };
-    static ref TEXT_LABELS: Vec<&'static str> = {
-        include_str!("../assets/labels/label_cn.txt")
-            .lines()
-            .filter(|x| !x.is_empty())
-            .collect()
-    };
+        ))
+        .unwrap();
+    static ref TEXT_LABELS: Vec<&'static str> = include_str!("../assets/labels/label_cn.txt")
+        .lines()
+        .filter(|text| !text.is_empty())
+        .map(|text| match text {
+            "<space>" => " ",
+            text => text,
+        })
+        .collect();
 }
 
 pub fn ocr_with_image_path<P: AsRef<Path>>(image_path: P) -> (String, f32) {
@@ -51,8 +50,8 @@ pub fn ocr_with_image_path<P: AsRef<Path>>(image_path: P) -> (String, f32) {
 }
 
 pub fn ocr(image: DynamicImage) -> (String, f32) {
-    let (image_arr, image_lengths_arr) = image_to_onnx_input(image);
-    let logits = infer(image_arr, image_lengths_arr);
+    let (input_images, input_lengths) = image_to_onnx_input(image);
+    let logits = infer(input_images, input_lengths);
     post_process(logits)
 }
 
@@ -61,7 +60,7 @@ fn image_to_onnx_input(image: DynamicImage) -> (Array<f32, Ix4>, Array<i64, Ix1>
         let (width, height) = (image.width(), image.height());
         let image = image.into_luma8();
         let image_data = image.into_vec();
-        let avg = image_data.iter().map(|x| *x as f32).sum::<f32>() / image_data.len() as f32;
+        let avg = image_data.iter().map(|&x| x as f32).sum::<f32>() / image_data.len() as f32;
         let image_data = if avg > 255.0 / 2.0 {
             image_data
         } else {
@@ -94,7 +93,9 @@ fn image_to_onnx_input(image: DynamicImage) -> (Array<f32, Ix4>, Array<i64, Ix1>
         }
     }
 
-    fn stand_image_to_input_arr(stand_image: GrayImage) -> Array<f32, Ix3> {
+    /// 标准图片转为输入数组形式。标准图片：灰度图，高度32，宽度至少为8，浅色背景，深色文字，字符距离图片边界4-8像素。
+    /// 输入数组形状：通道数*高度*宽度，通道数为1，高度为32，宽度为图片宽度。
+    fn stand_image_to_input_array(stand_image: GrayImage) -> Array<f32, Ix3> {
         let image_width = stand_image.width();
         let image_data = stand_image
             .into_vec()
@@ -110,7 +111,7 @@ fn image_to_onnx_input(image: DynamicImage) -> (Array<f32, Ix4>, Array<i64, Ix1>
     let image = to_light_background_gray(image);
     let image = resize_to_32_height_and_at_least_8_width(image);
     let width = image.width();
-    let input_images = stand_image_to_input_arr(image).insert_axis(Axis(0));
+    let input_images = stand_image_to_input_array(image).insert_axis(Axis(0));
     let input_lengths = array![width as i64];
     (input_images, input_lengths)
 }
@@ -156,34 +157,31 @@ fn post_process(logits: ArrayBase<OwnedRepr<f32>, IxDyn>) -> (String, f32) {
 
     let mut best_path = probs
         .map_axis(Axis(0), |x| {
-            let mut max = 0.0;
-            let mut index = 0;
-            for (i, &v) in x.iter().enumerate() {
-                if v > max {
-                    max = v;
-                    index = i;
-                }
-            }
-            index as i64
+            x.iter()
+                .enumerate()
+                .fold((0, f32::NEG_INFINITY), |(index, max_value), (i, &v)| {
+                    if v > max_value {
+                        (i, v)
+                    } else {
+                        (index, max_value)
+                    }
+                })
+                .0 as i64
         })
         .into_raw_vec();
     best_path.dedup();
     let text = best_path
-        .iter()
-        .filter(|&&x| x != TEXT_LABELS.len() as i64)
-        .map(|&x| match TEXT_LABELS[x as usize] {
-            "<space>" => " ",
-            text => text,
-        })
+        .into_iter()
+        .filter_map(|x| TEXT_LABELS.get(x as usize))
+        .copied()
         .collect::<String>();
-    let prob = *probs
+    let prob = probs
         .map_axis(Axis(0), |x| {
             x.iter().fold(f32::NEG_INFINITY, |acc, &v| acc.max(v))
         })
         .into_raw_vec()
-        .iter()
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
+        .into_iter()
+        .fold(f32::INFINITY, |acc, v| acc.min(v));
 
     (text, prob)
 }
@@ -195,7 +193,8 @@ mod test {
     #[test]
     fn test_ocr() {
         let image_path = "assets/images/for_test/教训.png";
-        let (text, _prob) = ocr_with_image_path(image_path);
+        let (text, prob) = ocr_with_image_path(image_path);
         assert_eq!(text, "教训");
+        assert!(prob > 0.9);
     }
 }
