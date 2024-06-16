@@ -12,12 +12,14 @@
 //! use simple_ocr::{ocr, ocr_with_image_path};
 //!
 //! let image_path = "assets/images/for_test/教训.png";
-//! let (text, _prob) = ocr_with_image_path(image_path);
+//! let (text, prob) = ocr_with_image_path(image_path);
 //! assert_eq!(text, "教训");
+//! assert!(prob > 0.9);
 //!
 //! let image = image::open(image_path).unwrap();
-//! let (text, _prob) = ocr(image);
+//! let (text, prob) = ocr(image);
 //! assert_eq!(text, "教训");
+//! assert!(prob > 0.9);
 //! ```
 
 use std::path::Path;
